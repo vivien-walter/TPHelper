@@ -139,7 +139,6 @@ def splitTrack(dataframe, track_id, split_after):
         # Change the track number
         if frame > split_after:
             object_index = old_track[old_track['frame'] == frame].index[0]
-            print(object_index)
             dataframe.at[object_index, 'particle'] = new_track_id
 
     return dataframe
