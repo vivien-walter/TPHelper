@@ -76,7 +76,12 @@ def displayDataframe(dataframe, array, frame=None, show_frame=0):
 
     # Display a trajectory
     else:
-        displayTrajectory(array[show_frame], dataframe)
+
+        # Select the frame if needed
+        if len(array.shape) == 3:
+            array = array[show_frame]
+
+        displayTrajectory(array, dataframe)
 
 ##-\-\-\-\-\-\-\-\-\-\
 ## TRACK MODIFICATIONS
