@@ -12,7 +12,7 @@ except:
 
 setup(
     name = "TPHelper",
-    version = "1.0",
+    version = "1.1",
     author = "Vivien WALTER",
     author_email = "walter.vivien@gmail.com",
     description = ("Python3 module to define and optimize parameters for TrackPy."),
@@ -27,6 +27,8 @@ setup(
     ],
     python_requires='>=3.2',
     install_requires=[
+        'pandas',
         'trackpy',
+        'scipy',
     ]
 )

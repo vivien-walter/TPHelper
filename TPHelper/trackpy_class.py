@@ -507,7 +507,7 @@ class TrackManager:
         if fps is not None:
             input_fps = fps
 
-        return tpan.getMSD(
+        return tpan.computeMSD(
             positions,
             combine_all=combine_all,
             fps=input_fps,
