@@ -1,5 +1,6 @@
 from copy import deepcopy
 import numpy as np
+import os
 import pandas as pd
 import sys
 import trackpy as tp
@@ -8,6 +9,7 @@ import TPHelper.input_output as tpio
 import TPHelper.intensity_profiler as tpint
 import TPHelper.track_manager as tpmng
 import TPHelper.trackpy_man as tpman
+import TPHelper.trajectory_analysis as tpan
 
 ##-\-\-\-\-\-\-\-\-\
 ## PRIVATE FUNCTIONS
@@ -23,6 +25,7 @@ def _nbr2odd(number):
 
     return number
 
+
 # ---------------------------------------
 # Check if the array have multiple frames
 def _check_multiple_frames(array=None, positions=None):
@@ -30,15 +33,22 @@ def _check_multiple_frames(array=None, positions=None):
     # Check the shape of the array
     if array is not None:
         if array.shape[0] <= 1:
-            raise Exception("The function cannot be called as it requires a sequence of frame.")
+            raise Exception(
+                "The function cannot be called as it requires a sequence of frame."
+            )
 
     # Check the content of the dataframe
     if positions is not None:
-        if 'frame' in positions:
-            if len(np.unique(positions['frame'])) <= 1:
-                raise Exception("The function cannot be called as it requires multiple frames to be saved in the dataframe.")
+        if "frame" in positions:
+            if len(np.unique(positions["frame"])) <= 1:
+                raise Exception(
+                    "The function cannot be called as it requires multiple frames to be saved in the dataframe."
+                )
         else:
-            raise Exception("The function cannot be called as it requires multiple frames to be saved in the dataframe.")
+            raise Exception(
+                "The function cannot be called as it requires multiple frames to be saved in the dataframe."
+            )
+
 
 # -------------------------------
 # Get the array from the instance
@@ -72,7 +82,9 @@ def _get_array(input, raw=False, frame=None, stack=False, display=False):
 
         # Raise an exception if it does not work
         except:
-            raise Exception("A compatible NumPy array or microImage instance is required here as an input.")
+            raise Exception(
+                "A compatible NumPy array or microImage instance is required here as an input."
+            )
 
     # Select a frame if required
     if frame is not None and len(array.shape) == 3:
@@ -84,14 +96,62 @@ def _get_array(input, raw=False, frame=None, stack=False, display=False):
 
     return array
 
+
+# -----------------------------
+# Return the appropriate scales
+def _get_scales(
+    object, scale_input=None, space_scale=None, time_scale=None, get_fps=False
+):
+
+    # Get the time and space scale from the class
+    input_space_scale = object.space_scale
+    input_time_scale = object.time_scale
+
+    # Get the time and space scale from an input
+    if scale_input is not None:
+        input_space_scale = extractSpaceCalibration(scale_input)
+        input_time_scale = extractTimeCalibration(scale_input)
+
+    # Correct the space scale input
+    if input_space_scale is None and space_scale is None:
+        space_scale = 1
+    elif space_scale is not None:
+        space_scale = space_scale
+    else:
+        space_scale = input_space_scale
+
+    # Correct the time scale input
+    if input_time_scale is None and time_scale is None:
+        time_scale = 1
+    elif time_scale is not None:
+        time_scale = time_scale
+    else:
+        time_scale = input_time_scale
+
+    # Convert in FPS if needed
+    if get_fps:
+        time_scale = 1 / time_scale
+
+    return space_scale, time_scale
+
+
 # ---------------------------------------------
 # Check the input for the TrackManager instance
-def _check_input(input, display_input=None):
+def _check_input(input, display_input=None, space_scale=None, time_scale=None):
 
     # Case if the input is a pandas Dataframe
     if isinstance(input, pd.DataFrame):
         dataframe = input
         display = None
+        output_space_scale = None
+        output_time_scale = None
+
+    # Case if the input is an XML file
+    elif os.path.isfile(str(input)):
+        dataframe = tpio.loadTrajectory(input)
+        display = None
+        output_space_scale = None
+        output_time_scale = None
 
     # Case if the input is a TrackingSession instance
     else:
@@ -100,22 +160,43 @@ def _check_input(input, display_input=None):
             dataframe = input.tracks
             display = input.input
 
+            output_space_scale = extractSpaceCalibration(display)
+            output_time_scale = extractTimeCalibration(display)
+
         # Raise an exception if it does not work
         except:
-            raise Exception("A compatible Pandas DataFrame or TrackingSession instance is required here as an input.")
+            raise Exception(
+                "A compatible Pandas DataFrame or TrackingSession instance is required here as an input."
+            )
 
     # Update the array if needed
     if display_input is not None:
         display = display_input
 
-    return dataframe, display
+    # Update the scales if needed
+    if space_scale is not None:
+        output_space_scale = space_scale
+
+    if time_scale is not None:
+        output_time_scale = time_scale
+
+    return dataframe, display, output_space_scale, output_time_scale
+
 
 ##-\-\-\-\-\-\-\
 ## TRACKPY CLASS
 ##-/-/-/-/-/-/-/
 
+
 class TrackingSession:
-    def __init__(self, diameter=41, dark_spots=False, search_range=None, load_file=None, input=None):
+    def __init__(
+        self,
+        diameter=41,
+        dark_spots=False,
+        search_range=None,
+        load_file=None,
+        input=None,
+    ):
 
         # Keep the array in memory
         self.input = input
@@ -138,7 +219,7 @@ class TrackingSession:
         self.filter_before = None
         self.filter_after = None
         self.characterize = True
-        self.engine = 'auto'
+        self.engine = "auto"
 
         # Initialize the default parameters for tp.link and trajectory filtering
         if search_range is None:
@@ -171,21 +252,22 @@ class TrackingSession:
         self.diameter = _nbr2odd(self.diameter)
 
         # Run TrackPy
-        dataframe = tp.locate(array,
+        dataframe = tp.locate(
+            array,
             self.diameter,
-            minmass = self.minmass,
-            maxsize = self.maxsize,
-            separation = self.separation,
-            noise_size = self.noise_size,
-            smoothing_size = self.smoothing_size,
-            threshold = self.threshold,
-            invert = self.invert,
-            percentile = self.percentile,
-            topn = self.topn,
-            preprocess = self.preprocess,
-            max_iterations = self.max_iterations,
-            characterize = self.characterize,
-            engine = self.engine
+            minmass=self.minmass,
+            maxsize=self.maxsize,
+            separation=self.separation,
+            noise_size=self.noise_size,
+            smoothing_size=self.smoothing_size,
+            threshold=self.threshold,
+            invert=self.invert,
+            percentile=self.percentile,
+            topn=self.topn,
+            preprocess=self.preprocess,
+            max_iterations=self.max_iterations,
+            characterize=self.characterize,
+            engine=self.engine,
         )
 
         # Store in the instance
@@ -208,21 +290,22 @@ class TrackingSession:
         self.diameter = _nbr2odd(self.diameter)
 
         # Run TrackPy
-        dataframe = tp.batch(array,
+        dataframe = tp.batch(
+            array,
             self.diameter,
-            minmass = self.minmass,
-            maxsize = self.maxsize,
-            separation = self.separation,
-            noise_size = self.noise_size,
-            smoothing_size = self.smoothing_size,
-            threshold = self.threshold,
-            invert = self.invert,
-            percentile = self.percentile,
-            topn = self.topn,
-            preprocess = self.preprocess,
-            max_iterations = self.max_iterations,
-            characterize = self.characterize,
-            engine = self.engine
+            minmass=self.minmass,
+            maxsize=self.maxsize,
+            separation=self.separation,
+            noise_size=self.noise_size,
+            smoothing_size=self.smoothing_size,
+            threshold=self.threshold,
+            invert=self.invert,
+            percentile=self.percentile,
+            topn=self.topn,
+            preprocess=self.preprocess,
+            max_iterations=self.max_iterations,
+            characterize=self.characterize,
+            engine=self.engine,
         )
 
         # Store in the instance
@@ -245,18 +328,21 @@ class TrackingSession:
             dataframe = self.spots
 
         # Connect positions together
-        dataframe = tp.link(dataframe,
+        dataframe = tp.link(
+            dataframe,
             self.search_range,
-            memory = self.memory,
-            adaptive_stop = self.adaptive_stop,
-            adaptive_step = self.adaptive_step,
-            neighbor_strategy = self.neighbor_strategy,
-            link_strategy = self.link_strategy,
+            memory=self.memory,
+            adaptive_stop=self.adaptive_stop,
+            adaptive_step=self.adaptive_step,
+            neighbor_strategy=self.neighbor_strategy,
+            link_strategy=self.link_strategy,
         )
 
         # Remove spurious trajectory
         if self.filter_stubs is not None:
-            dataframe = tp.filtering.filter_stubs(dataframe, threshold=self.filter_stubs)
+            dataframe = tp.filtering.filter_stubs(
+                dataframe, threshold=self.filter_stubs
+            )
 
         # Regenerate the index
         dataframe = dataframe.reset_index(drop=True)
@@ -283,7 +369,9 @@ class TrackingSession:
 
     # ---------------------------------------
     # Display the position on the given frame
-    def preview(self, input=None, positions=None, frame=None, show_frame=0, raw_input=False):
+    def preview(
+        self, input=None, positions=None, frame=None, show_frame=0, raw_input=False
+    ):
 
         # Get the array
         if input is None:
@@ -317,19 +405,30 @@ class TrackingSession:
         for setting in setting_dict.keys():
             setattr(self, setting, setting_dict[setting])
 
+
 ##-\-\-\-\-\-\-\-\
 ## TRAJECTORY CLASS
 ##-/-/-/-/-/-/-/-/
 
+
 class TrackManager:
-    def __init__(self, input, display_input=None):
+    def __init__(self, input, display_input=None, space_scale=None, time_scale=None):
 
         # Extract the informations from the input
-        positions, display = _check_input(input, display_input=display_input)
+        positions, display, space_scale, time_scale = _check_input(
+            input,
+            display_input=display_input,
+            space_scale=space_scale,
+            time_scale=time_scale,
+        )
 
         # Initialize the object
         self.positions = positions
         self.display = display
+
+        # Set the scales
+        self.space_scale = space_scale
+        self.time_scale = time_scale
 
     ##-\-\-\-\-\-\-\
     ## PATH SELECTION
@@ -338,7 +437,7 @@ class TrackManager:
     # ---------------------------------
     # List all the tracks in the object
     def listTracks(self):
-        return np.copy( self.positions['particle'].unique() )
+        return np.copy(self.positions["particle"].unique())
 
     # -------------------
     # Re-index the tracks
@@ -374,12 +473,161 @@ class TrackManager:
         self.positions = tpmng.deleteTrack(self.positions, track_id)
 
     ##-\-\-\-\-\-\-\
-    ## PATH ANALYSIS
+    ## TRACK ANALYSIS
     ##-/-/-/-/-/-/-/
+
+    # -----------------------------------
+    # Compute the MSD on the given tracks
+    def getMSD(
+        self,
+        track_ids=None,
+        combine_all=True,
+        fps=None,
+        time_scale=None,
+        space_scale=None,
+        max_lagtime=None,
+        scale_input=None,
+    ):
+
+        # Extract the positions for calculations
+        if track_ids is not None:
+            positions = self.extract(track_ids=track_ids, as_dataframe=True)
+        else:
+            positions = self.positions
+
+        # Get the time and space scale from the input if given
+        space_scale, input_fps = _get_scales(
+            self,
+            scale_input=scale_input,
+            space_scale=space_scale,
+            time_scale=time_scale,
+            get_fps=True,
+        )
+
+        if fps is not None:
+            input_fps = fps
+
+        return tpan.getMSD(
+            positions,
+            combine_all=combine_all,
+            fps=input_fps,
+            space_scale=space_scale,
+            max_lagtime=max_lagtime,
+        )
+
+    # -------------------------------------------
+    # Measure the diffusivity from collected MSDs
+    def getDiffusivity(
+        self,
+        msd=None,
+        dimensions=2,
+        track_ids=None,
+        combine_all=True,
+        fps=None,
+        space_scale=None,
+        max_lagtime=None,
+        scale_input=None,
+        time_scale=None,
+    ):
+
+        # Calculate the MSD if not provided
+        if msd is None:
+            msd = self.getMSD(
+                track_ids=track_ids,
+                combine_all=combine_all,
+                fps=fps,
+                space_scale=space_scale,
+                max_lagtime=max_lagtime,
+                scale_input=scale_input,
+                time_scale=time_scale,
+            )
+
+        return tpan.getDiffusivity(msd, dimensions=dimensions)
+
+    # --------------------------------------------------
+    # Verify the track by analysing all the informations
+    def verify(
+        self,
+        array=None,
+        signal_properties=False,
+        histograms=True,
+        highlight_ids=None,
+        scale_input=None,
+        track_ids=None,
+        scan_window=50,
+        profile_type="gaussian",
+        line_angle=0,
+        fit_type="radial",
+        n_points=1000,
+        space_scale=None,
+        dark_spots=False,
+        use_fit=True,
+        fps=None,
+        max_lagtime=None,
+        time_scale=None,
+        dimensions=2,
+    ):
+
+        # Extract the positions for calculations
+        if track_ids is not None:
+            positions = self.extract(track_ids=track_ids, as_dataframe=True)
+        else:
+            positions = self.positions
+
+        # Extract array if needed
+        if array is None:
+            array = _get_array(self.display, stack=True)
+
+        # Get the time and space scale from the input if given
+        space_scale, input_fps = _get_scales(
+            self,
+            scale_input=scale_input,
+            space_scale=space_scale,
+            time_scale=time_scale,
+            get_fps=True,
+        )
+
+        if fps is not None:
+            input_fps = fps
+
+        tpan.verifyTracks(
+            positions,
+            array,
+            signal_properties=signal_properties,
+            histograms=histograms,
+            highlight_ids=highlight_ids,
+            track_ids=track_ids,
+            scan_window=scan_window,
+            profile_type=profile_type,
+            line_angle=line_angle,
+            fit_type=fit_type,
+            n_points=n_points,
+            space_scale=space_scale,
+            dark_spots=dark_spots,
+            use_fit=use_fit,
+            fps=input_fps,
+            max_lagtime=max_lagtime,
+            dimensions=dimensions,
+        )
+
+    ##-\-\-\-\-\-\-\-\-\
+    ## INTENSITY ANALYSIS
+    ##-/-/-/-/-/-/-/-/-/
 
     # -------------------------------------------
     # Extract the intensity profiles on each path
-    def intensityProfile(array=None, track_ids=None, scan_window=50, profile_type='gaussian', line_angle=0, fit_type='radial', n_points=1000, space_scale=None, dark_spots=False):
+    def intensityProfile(
+        self,
+        array=None,
+        track_ids=None,
+        scan_window=50,
+        profile_type="gaussian",
+        line_angle=0,
+        fit_type="radial",
+        n_points=1000,
+        space_scale=None,
+        dark_spots=False,
+    ):
 
         # Extract array if needed
         if array is None:
@@ -389,27 +637,93 @@ class TrackManager:
         if space_scale is None:
             space_scale = extractSpaceCalibration(self.display)
 
-        return tpint.intensityProfile(self.positions, array, track_ids=track_ids, scan_window=scan_window, profile_type=profile_type, line_angle=line_angle, fit_type=fit_type, n_points=n_points, space_scale=space_scale, dark_spots=dark_spots)
+        return tpint.intensityProfile(
+            self.positions,
+            array,
+            track_ids=track_ids,
+            scan_window=scan_window,
+            profile_type=profile_type,
+            line_angle=line_angle,
+            fit_type=fit_type,
+            n_points=n_points,
+            space_scale=space_scale,
+            dark_spots=dark_spots,
+        )
 
     # --------------------------------------------------
     # Calculate the properties of the intensity profiles
-    def signalProperties(profiles=None, array=None, track_ids=None, scan_window=50, profile_type='gaussian', line_angle=0, fit_type='radial', n_points=1000, space_scale=None, use_fit=True, dark_spots=False):
+    def signalProperties(
+        self,
+        profiles=None,
+        array=None,
+        track_ids=None,
+        scan_window=50,
+        profile_type="gaussian",
+        line_angle=0,
+        fit_type="radial",
+        n_points=1000,
+        space_scale=None,
+        use_fit=True,
+        dark_spots=False,
+        percentage=True,
+    ):
 
         # Generate profiles if needed
         if profiles is None:
-            profiles = self.intensityProfile(array=array, track_ids=track_ids, scan_window=scan_window, profile_type=profile_type, line_angle=line_angle, fit_type=fit_type, n_points=n_points, space_scale=space_scale, dark_spots=dark_spots)
+            profiles = self.intensityProfile(
+                array=array,
+                track_ids=track_ids,
+                scan_window=scan_window,
+                profile_type=profile_type,
+                line_angle=line_angle,
+                fit_type=fit_type,
+                n_points=n_points,
+                space_scale=space_scale,
+                dark_spots=dark_spots,
+            )
 
-        return ip.signalProperties(profiles, use_fit=use_fit, dark_spots=dark_spots, fit_type=profile_type)
+        return ip.signalProperties(
+            profiles,
+            use_fit=use_fit,
+            dark_spots=dark_spots,
+            fit_type=profile_type,
+            percentage=percentage,
+        )
 
     # --------------------------------------------------
     # Calculate the properties of the intensity profiles
-    def integratedProfile(profiles=None, array=None, track_ids=None, scan_window=50, profile_type='gaussian', line_angle=0, fit_type='radial', n_points=1000, space_scale=None, use_fit=True, dark_spots=False):
+    def integratedProfile(
+        self,
+        profiles=None,
+        array=None,
+        track_ids=None,
+        scan_window=50,
+        profile_type="gaussian",
+        line_angle=0,
+        fit_type="radial",
+        n_points=1000,
+        space_scale=None,
+        use_fit=True,
+        dark_spots=False,
+    ):
 
         # Generate profiles if needed
         if profiles is None:
-            profiles = self.intensityProfile(array=array, track_ids=track_ids, scan_window=scan_window, profile_type=profile_type, line_angle=line_angle, fit_type=fit_type, n_points=n_points, space_scale=space_scale, dark_spots=dark_spots)
+            profiles = self.intensityProfile(
+                array=array,
+                track_ids=track_ids,
+                scan_window=scan_window,
+                profile_type=profile_type,
+                line_angle=line_angle,
+                fit_type=fit_type,
+                n_points=n_points,
+                space_scale=space_scale,
+                dark_spots=dark_spots,
+            )
 
-        return ip.integrateProfile(profiles, use_fit=use_fit, dark_spots=dark_spots, fit_type=profile_type)
+        return ip.integrateProfile(
+            profiles, use_fit=use_fit, dark_spots=dark_spots, fit_type=profile_type
+        )
 
     ##-\-\-\-\-\-\
     ## OUTPUT DATA
@@ -417,7 +731,14 @@ class TrackManager:
 
     # ------------------------------------
     # Display a specific path and/or frame
-    def show(self, frame=None, track_ids=None, display_input=None, show_frame=0, raw_input=False):
+    def show(
+        self,
+        frame=None,
+        track_ids=None,
+        display_input=None,
+        show_frame=0,
+        raw_input=False,
+    ):
 
         # Adjust the display
         if frame is not None:
@@ -442,7 +763,7 @@ class TrackManager:
 
         # Return a new dataframe
         if as_dataframe:
-            return deepcopy( self.positions[ self.positions['particle'].isin(track_ids)] )
+            return deepcopy(self.positions[self.positions["particle"].isin(track_ids)])
 
         # Return a list of array
         else:
@@ -450,16 +771,19 @@ class TrackManager:
             # Extract all tracks as arrays
             all_arrays = []
             for id in track_ids:
-                current_track = self.positions[ self.positions['particle'] == id ]
-                current_array = current_track[['frame','y','x']].to_numpy()
-                all_arrays.append( np.copy(current_array) )
+                current_track = self.positions[self.positions["particle"] == id]
+                current_array = current_track[["frame", "y", "x"]].to_numpy()
+                all_arrays.append(np.copy(current_array))
 
             return all_arrays
 
     # --------------------------------------
     # Save the selected trajectory into file
-    def save(self, file_name=None, track_ids=None, default='.csv'):
-        tpio.saveTrajectory(self.positions, filename=file_name, default=default, particle_ids=track_ids)
+    def save(self, file_name=None, track_ids=None, default=".csv"):
+        tpio.saveTrajectory(
+            self.positions, filename=file_name, default=default, particle_ids=track_ids
+        )
+
 
 ##-\-\-\-\-\-\-\-\
 ## PUBLIC FUNTIONS
@@ -469,6 +793,7 @@ class TrackManager:
 # Extract the array from the given input
 def extractArray(input, raw=False, frame=None, stack=False, display=False):
     return _get_array(input, raw=raw, frame=frame, stack=stack, display=display)
+
 
 # ------------------------------------
 # Extract the positions from the input
@@ -491,9 +816,12 @@ def extractPositions(input):
 
     # Raise an error
     else:
-        raise Exception("A compatible Pandas DataFrame, TrackingSession or TrackManager instance is required here as an input.")
+        raise Exception(
+            "A compatible Pandas DataFrame, TrackingSession or TrackManager instance is required here as an input."
+        )
 
     return positions, array
+
 
 # ---------------------------------------
 # Extract the space calibration if exists
@@ -507,3 +835,17 @@ def extractSpaceCalibration(input):
         space_scale = None
 
     return space_scale
+
+
+# --------------------------------------
+# Extract the time calibration if exists
+def extractTimeCalibration(input):
+
+    # Try to get the space unit from the input
+    try:
+        time_scale = input.time_scale
+
+    except:
+        time_scale = None
+
+    return time_scale
